@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="rubank_api_client",
-    version="0.0.1",
+    version="1.0.0",
     description="A Python client for interacting with Sber Bank's online services.",
     author="Smarandii",
     packages=find_packages(),
