@@ -164,31 +164,30 @@ The `get_operations` method is used to retrieve banking operations from SberBank
 
 4. **Code example:**  
 ```py
-import pandas as pd 
-from rubank_api_client.sber import SberBankApiClient, SberBankOperationsFilter
+import pandas as pd
+from pprint import pprint
+from rubank_api_client import SberBankApiClient, SberBankOperationsFilter
 
-sbac = SberBankApiClient(path_to_cookies_file="local_cookies.pckl")
+if __name__ == "__main__":
+    sbac = SberBankApiClient(path_to_cookies_file=None)
 
-operations_json: dict
+    _filter = SberBankOperationsFilter(
+        operation_type='income',
+        date_from='01.02.2025T00:00:00',
+        date_to='15.02.2025T23:59:59',
+        result_format=None
+    )
+    _filter.format = dict
+    operations_json = sbac.get_operations(
+        _filter=_filter
+    )
 
-operations_pandas_df: pd.DataFrame
-pd_dataframe_filter = json_filter
-pd_dataframe_filter.format = pd.DataFrame
+    pprint(operations_json)
 
-filter = SberBankOperationsFilter(
-    type='income',
-    date_from_='07.02.2025T23:59:59',
-    date_to='07.02.2025T23:59:59',
-    resource=["card:1100016973909570"],
-    format=None
-)
-filter.format = dict
-operations_json = SberBankApiClient.get_operations(
-    filter=filter
-)
+    _filter.format = pd.DataFrame
+    operations_pandas_df = sbac.get_operations(
+        _filter=_filter
+    )
 
-filter.format = pd.DataFrame
-operations_pandas_df = SberBankApiClient.get_operations(
-    filter=filter
-)
+    pprint(operations_pandas_df)
 ```

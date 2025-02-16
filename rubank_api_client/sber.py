@@ -10,7 +10,7 @@ from selenium.webdriver.common.by import By
 
 
 class SberBankOperationsFilter:
-    def __init__(self, operation_type: str, date_from: str, date_to: str, resource: list, result_format: any = None,
+    def __init__(self, operation_type: str, date_from: str, date_to: str, resource: list = None, result_format: any = None,
                  pagination_offset: int = 0, pagination_size: int = 50):
         self.type = operation_type
         self.date_from = date_from
@@ -28,7 +28,6 @@ class SberBankOperationsFilter:
                                 f"result_format is set to None")
 
     def to_json(self):
-        # Build the JSON payload according to the README details.
         payload = {
             "filterName": self.type,
             "from": self.date_from,
@@ -37,29 +36,35 @@ class SberBankOperationsFilter:
             "paginationOffset": self.pagination_offset,
             "paginationSize": self.pagination_size,
         }
+        # TODO: Remove None key value pairs from payload dictionary
         return payload
 
 
 class SberBankApiClient:
     LOGIN_URL = "https://online.sberbank.ru/CSAFront/index.do"
+    # TODO: web1 could change to other possible web node names - need to figure out all of them
+    #  or a way to dynamically figure out where session is initialized
     MAIN_URL = "https://web1.online.sberbank.ru/main"
     WARMUP_URL = "https://web1.online.sberbank.ru/api/warmUpSession"
     LOG_REPORT_URL = "https://web1.online.sberbank.ru/api/log/report"
     OPERATIONS_URL = "https://web-node1.online.sberbank.ru/uoh-bh/v1/operations/list"
 
-    def __init__(self, path_to_cookies_file: str):
+    def __init__(self, path_to_cookies_file: str = None):
         self.path_to_cookies_file = path_to_cookies_file
         self.session = requests.Session()
         self.cookies = None
         self.headers = None
+        self.logger = loguru.logger
 
-        if not self._load_session() or self._session_expired():
+        if not path_to_cookies_file or not os.path.exists(self.path_to_cookies_file):
+            self._login_and_save_session()
+        elif not self._load_session() or self._session_expired():
             self._login_and_save_session()
         else:
             if not self._validate_session():
                 self._login_and_save_session()
             else:
-                print("Session is valid. You're in!")
+                self.logger.info("Session is valid. You're in!")
 
     def _load_session(self):
         # Load cookies and headers from a pickle file if it exists.
@@ -86,12 +91,12 @@ class SberBankApiClient:
             if response.status_code == 200 and response.json().get("code") == 0:
                 return True
         except Exception as e:
-            print("Session validation failed:", e)
+            self.logger.info("Session validation failed:", e)
         return False
 
     def _login_and_save_session(self):
         # Use Selenium to perform login.
-        print("No valid session found. Initiating login process...")
+        self.logger.info("No valid session found. Initiating login process...")
         driver = webdriver.Chrome()  # Ensure you have the chromedriver in PATH.
         driver.get(self.LOGIN_URL)
 
@@ -100,7 +105,7 @@ class SberBankApiClient:
         while driver.current_url != self.MAIN_URL:
             time.sleep(1)
 
-        print("Login successful. Retrieving session data...")
+        self.logger.info("Login successful. Retrieving session data...")
 
         # Retrieve cookies from Selenium.
         selenium_cookies = driver.get_cookies()
@@ -120,32 +125,32 @@ class SberBankApiClient:
             pickle.dump({"cookies": self.cookies, "headers": self.headers}, f)
 
         driver.quit()
-        print("Session data saved. You're in!")
+        self.logger.info("Session data saved. You're in!")
 
     def warm_up_session(self):
         # Send a POST request to prolong the session.
         try:
             response = self.session.post(self.WARMUP_URL, headers=self.headers)
             if response.status_code == 200 and response.json().get("code") == 0:
-                print("Session prolonged successfully.")
+                self.logger.info("Session prolonged successfully.")
             else:
-                print("Failed to prolong session.")
+                self.logger.info("Failed to prolong session.")
         except Exception as e:
-            print("Error during session warm-up:", e)
+            self.logger.info("Error during session warm-up:", e)
 
-    def get_operations(self, filter: SberBankOperationsFilter):
-        payload = filter.to_json()
+    def get_operations(self, _filter: SberBankOperationsFilter):
+        payload = _filter.to_json()
 
         try:
             response = self.session.post(self.OPERATIONS_URL, json=payload, headers=self.headers)
             if response.status_code == 200:
                 data = response.json()
-                if filter.format == pd.DataFrame:
+                if _filter.result_format == pd.DataFrame:
                     return pd.DataFrame(data.get("body", {}).get("operations", []))
                 else:
                     return data
             else:
-                print("Failed to get operations. Status code:", response.status_code)
+                self.logger.info("Failed to get operations. Status code:", response.status_code)
         except Exception as e:
-            print("Error retrieving operations:", e)
+            self.logger.info("Error retrieving operations:", e)
         return None
