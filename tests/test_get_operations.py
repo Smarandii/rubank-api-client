@@ -3,7 +3,7 @@ from pprint import pprint
 from rubank_api_client import SberBankApiClient, SberBankOperationsFilter
 
 if __name__ == "__main__":
-    sbac = SberBankApiClient(path_to_cookies_file=None)
+    sbac = SberBankApiClient(path_to_cookies_file='../cookies.pkl')
 
     _filter = SberBankOperationsFilter(
         operation_type='income',

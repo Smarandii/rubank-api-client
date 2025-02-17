@@ -28,6 +28,7 @@ If there are no stored cookies and headers, or if they have expired, the client 
 3. **User Authorization:**  
    After successful login, SberBank authorizes the user and redirects to:  
    `https://web1.online.sberbank.ru/main`
+   web1 - could change to other node name e.g. web2
 
 4. **Session Recognition:**  
    The client uses Selenium to detect that the current page is the authorized page (`https://web1.online.sberbank.ru/main`).
@@ -70,6 +71,7 @@ The `get_operations` method is used to retrieve banking operations from SberBank
 1. **Operations Endpoint:**  
    The endpoint for retrieving operations is:  
    `https://web-node1.online.sberbank.ru/uoh-bh/v1/operations/list`
+   web-node1 - could change to other node name e.g. web-node2
 
 2. **Filtering Operations:**  
    The API supports various filters via a JSON body in the request:

@@ -1,4 +1,7 @@
 requests
 selenium
+selenium-wire
 pandas
 loguru
+blinker==1.7.0
+setuptools

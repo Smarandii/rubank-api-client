@@ -1,12 +1,10 @@
 import os
-import json
 import time
 import pickle
 import loguru
 import requests
 import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.common.by import By
+from seleniumwire import webdriver
 
 
 class SberBankOperationsFilter:
@@ -42,19 +40,14 @@ class SberBankOperationsFilter:
 
 class SberBankApiClient:
     LOGIN_URL = "https://online.sberbank.ru/CSAFront/index.do"
-    # TODO: web1 could change to other possible web node names - need to figure out all of them
-    #  or a way to dynamically figure out where session is initialized
-    MAIN_URL = "https://web1.online.sberbank.ru/main"
-    WARMUP_URL = "https://web1.online.sberbank.ru/api/warmUpSession"
-    LOG_REPORT_URL = "https://web1.online.sberbank.ru/api/log/report"
-    OPERATIONS_URL = "https://web-node1.online.sberbank.ru/uoh-bh/v1/operations/list"
 
     def __init__(self, path_to_cookies_file: str = None):
-        self.path_to_cookies_file = path_to_cookies_file
+        self.path_to_cookies_file = path_to_cookies_file if path_to_cookies_file else "cookies.pkl"
         self.session = requests.Session()
         self.cookies = None
         self.headers = None
         self.logger = loguru.logger
+        self.driver = webdriver.Chrome()
 
         if not path_to_cookies_file or not os.path.exists(self.path_to_cookies_file):
             self._login_and_save_session()
@@ -66,6 +59,21 @@ class SberBankApiClient:
             else:
                 self.logger.info("Session is valid. You're in!")
 
+    def __initialize_sberbank_public_api_endpoints(
+        self,
+        sberbank_web_node: str = None,
+        sberbank_api_web_node: str = None
+    ):
+        if sberbank_web_node:
+            self.SBERBANK_WEB_NODE = sberbank_web_node
+        if sberbank_api_web_node:
+            self.SBERBANK_API_WEB_NODE = sberbank_api_web_node
+
+        self.MAIN_URL = f"https://{self.SBERBANK_WEB_NODE}.online.sberbank.ru/main"
+        self.WARMUP_URL = f"https://{self.SBERBANK_WEB_NODE}.online.sberbank.ru/api/warmUpSession"
+        self.LOG_REPORT_URL = f"https://{self.SBERBANK_WEB_NODE}.online.sberbank.ru/api/log/report"
+        self.OPERATIONS_URL = f"https://web-node1.online.sberbank.ru/uoh-bh/v1/operations/list"
+
     def _load_session(self):
         # Load cookies and headers from a pickle file if it exists.
         if os.path.exists(self.path_to_cookies_file):
@@ -75,7 +83,8 @@ class SberBankApiClient:
                 self.headers = data.get("headers")
                 # Set loaded cookies in the requests session.
                 if self.cookies:
-                    self.session.cookies.update(self.cookies)
+                    for domen_cookies in self.cookies:
+                        self.session.cookies.update(domen_cookies)
             return True
         return False
 
@@ -97,18 +106,32 @@ class SberBankApiClient:
     def _login_and_save_session(self):
         # Use Selenium to perform login.
         self.logger.info("No valid session found. Initiating login process...")
-        driver = webdriver.Chrome()  # Ensure you have the chromedriver in PATH.
-        driver.get(self.LOGIN_URL)
+
+        self.driver.get(self.LOGIN_URL)
 
         # Wait for the user to log in manually.
-        # You can improve this by waiting until the URL changes to MAIN_URL.
-        while driver.current_url != self.MAIN_URL:
+        # Sberbank redirects user to https://{web_node_name}.online.sberbank.ru/main after
+        # That's why we use this expression to figure out if user logged in or not.
+        while self.driver.current_url.split(".")[1::] != ['online', 'sberbank', 'ru/main']:
             time.sleep(1)
+
+        # Extracting web_node_name from https://{web_node_name}.online.sberbank.ru/main
+        self.SBERBANK_WEB_NODE = self.driver.current_url.split(".")[:1:][0].split("https://")[1]
+
+        # Extracting api_web_node_name from
+        # https://{api_web_node_name}.online.sberbank.ru/main-screen/rest/v2/m1/web/section/meta
+        for request in self.driver.requests:
+            endpoint_parts = request.url.split(".")
+            if endpoint_parts[1::] == ['online', 'sberbank', 'ru/main-screen/rest/v2/m1/web/section/meta']:
+                self.SBERBANK_API_WEB_NODE = endpoint_parts[:1:][0].split("https://")[1]
+                self.SBERBANK_API_WEB_NODE_HEADERS = request.headers
+
+        self.__initialize_sberbank_public_api_endpoints(self.SBERBANK_WEB_NODE, self.SBERBANK_API_WEB_NODE)
 
         self.logger.info("Login successful. Retrieving session data...")
 
         # Retrieve cookies from Selenium.
-        selenium_cookies = driver.get_cookies()
+        selenium_cookies = self.driver.get_cookies()
         self.cookies = {cookie["name"]: cookie["value"] for cookie in selenium_cookies}
         self.session.cookies.update(self.cookies)
 
@@ -116,15 +139,16 @@ class SberBankApiClient:
         # This part requires custom logic or a proxy tool.
         # For now, assume headers are hardcoded or manually set.
         self.headers = {
-            "User-Agent": driver.execute_script("return navigator.userAgent;")
+            "User-Agent": self.driver.execute_script("return navigator.userAgent;")
             # Add any additional headers as required.
         }
+        self.headers.update(self.SBERBANK_API_WEB_NODE_HEADERS)
 
         # Save cookies and headers to file.
         with open(self.path_to_cookies_file, "wb") as f:
             pickle.dump({"cookies": self.cookies, "headers": self.headers}, f)
 
-        driver.quit()
+        self.driver.quit()
         self.logger.info("Session data saved. You're in!")
 
     def warm_up_session(self):
