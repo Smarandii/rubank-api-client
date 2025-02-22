@@ -72,7 +72,7 @@ class SberBankApiClient:
         self.MAIN_URL = f"https://{self.SBERBANK_WEB_NODE}.online.sberbank.ru/main"
         self.WARMUP_URL = f"https://{self.SBERBANK_WEB_NODE}.online.sberbank.ru/api/warmUpSession"
         self.LOG_REPORT_URL = f"https://{self.SBERBANK_WEB_NODE}.online.sberbank.ru/api/log/report"
-        self.OPERATIONS_URL = f"https://web-node1.online.sberbank.ru/uoh-bh/v1/operations/list"
+        self.OPERATIONS_URL = f"https://{self.SBERBANK_API_WEB_NODE}.online.sberbank.ru/uoh-bh/v1/operations/list"
 
     def _load_session(self):
         # Load cookies and headers from a pickle file if it exists.
@@ -83,8 +83,7 @@ class SberBankApiClient:
                 self.headers = data.get("headers")
                 # Set loaded cookies in the requests session.
                 if self.cookies:
-                    for domen_cookies in self.cookies:
-                        self.session.cookies.update(domen_cookies)
+                    self.session.cookies.update(self.cookies)
             return True
         return False
 
@@ -97,6 +96,7 @@ class SberBankApiClient:
         # Validate the session by making a POST request to warmUpSession.
         try:
             response = self.session.post(self.WARMUP_URL)
+            self.logger.info(f"POST {self.WARMUP_URL}: {response.json()}")
             if response.status_code == 200 and response.json().get("code") == 0:
                 return True
         except Exception as e:
@@ -164,7 +164,7 @@ class SberBankApiClient:
 
     def get_operations(self, _filter: SberBankOperationsFilter):
         payload = _filter.to_json()
-
+        payload = {key: value for key, value in payload.items() if value is not None}
         try:
             response = self.session.post(self.OPERATIONS_URL, json=payload, headers=self.headers)
             if response.status_code == 200:
