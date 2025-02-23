@@ -1,18 +1,14 @@
-import datetime
-import os
 import time
 import random
 import pickle
-import threading
-import requests
-import pandas as pd
 import loguru
+import datetime
+import requests
+import threading
+import pandas as pd
 
 from seleniumwire import webdriver
-from selenium.webdriver.common.by import By
 from selenium.common import TimeoutException
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 
 class SberBankOperationsFilter:

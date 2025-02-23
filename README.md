@@ -1,195 +1,166 @@
 # SberBankApiClient
 
-SberBankApiClient is a Python client designed to interact with SberBank's online services. It handles user authentication and session management, as well as retrieval of banking operations through secure API endpoints.
+SberBankApiClient is a Python client that interacts with SberBank’s online services. It handles user authentication, session management, and operations retrieval using a live browser session (via Selenium and Selenium Wire). The client mimics human activity to keep the session alive, thereby avoiding the need for frequent manual re-logins.
 
-## Overview
+## Features
 
-The client is responsible for:
-- Managing user sessions by handling cookies and headers.
-- Performing user authentication via the SberBank login page.
-- Maintaining a valid session by periodically "warming up" the session.
-- Retrieving detailed operation data with customizable filters.
+- **User Authentication:**  
+  Opens the SberBank login page so that users can log in manually. After login, the client extracts cookies, headers, and local storage information from the live session.
 
-## Authentication Workflow
+- **Session Persistence:**  
+  Saves session data (cookies, headers, local storage, and node IDs) into a pickle file. The session is continuously kept alive by mimicking human-like actions and monitoring warm-up requests in the browser.
 
-When an instance of the `SberBankApiClient` class is initialized, it follows one of two paths based on the state of stored session data.
+- **Automatic Session Keep-Alive:**  
+  Two daemon threads are spawned immediately after login:
+  1. **Human Activity Thread:**  
+     Simulates random user actions (e.g., scrolling, refreshing, and even triggering operations requests) to mimic real human behavior on the web app.
+  2. **Warm-Up Watch Thread:**  
+     Monitors for warm-up session requests (POSTs to `/api/warmUpSession`) using Selenium Wire. When such a request is detected, the session data is automatically conserved (i.e., updated cookies, headers, etc., are saved).
 
-### 1. No Saved or Expired Cookies & Headers
+- **Operations Retrieval:**  
+  Supports fetching banking operations data in two ways:
+  - **Via Requests Library:**  
+    Uses the saved session data to send requests to the operations API endpoint.
+  - **Via Browser's `fetch` API:**  
+    Executes asynchronous JavaScript (via Selenium’s `execute_async_script`) to post directly from the browser, leveraging the live session (this approach avoids issues with proxy errors that may occur with the `requests` session).
 
-If there are no stored cookies and headers, or if they have expired, the client performs the following steps:
+- **Flexible Filtering:**  
+  The `SberBankOperationsFilter` allows you to filter operations by type, date range, resource, and more. Results can be returned as either a Python dictionary or a pandas DataFrame.
 
-1. **Initialize Login Process:**  
-   The client opens the SberBank login page:  
-   `https://online.sberbank.ru/CSAFront/index.do`
+## Project Structure
 
-2. **User Login:**  
-   The user must log in with their SberBank credentials.
+- **rubank_api_client/sber.py**  
+  Contains the main `SberBankApiClient` class and `SberBankOperationsFilter` class. This file handles authentication, session management, simulation of human activity, warm-up monitoring, and operations retrieval (both via requests and via the browser).
 
-3. **User Authorization:**  
-   After successful login, SberBank authorizes the user and redirects to:  
-   `https://web1.online.sberbank.ru/main`
-   web1 - could change to other node name e.g. web2
+- **tests/test_get_operations.py**  
+  A test script that demonstrates how to use the client to retrieve operations data. It shows both the initial retrieval and how to fetch subsequent batches after waiting (simulating a long-running session).
 
-4. **Session Recognition:**  
-   The client uses Selenium to detect that the current page is the authorized page (`https://web1.online.sberbank.ru/main`).
+- **requirements.txt**  
+  Lists the project dependencies:
+  - requests
+  - selenium
+  - selenium-wire
+  - pandas
+  - loguru
+  - blinker==1.7.0
+  - setuptools
 
-5. **Saving Session Data:**  
-   The client extracts and saves all cookies and headers by monitoring network traffic for the POST request to:  
-   `https://web1.online.sberbank.ru/api/log/report`  
-   All headers and cookies used in this request are mimicked and stored.
+## How It Works
 
-6. **Success Notification:**  
-   A success message is displayed indicating that the authentication process is complete.
+1. **Initialization & Login:**
+   - The client opens the SberBank login URL (`https://online.sberbank.ru/CSAFront/index.do`).
+   - The user logs in manually.
+   - The client waits for specific network requests to determine the SberBank node IDs (frontend and backend).
+   - After login, session data (cookies, headers, local storage) is conserved in a pickle file for later reuse.
 
-### 2. Valid Saved Cookies & Headers
+2. **Session Keep-Alive:**
+   - **Human Activity Simulation:**  
+     A daemon thread simulates random actions (scrolling, refreshing, etc.) on the operations page to keep the session active.
+   - **Warm-Up Monitoring:**  
+     A separate thread waits for warm-up requests (`/api/warmUpSession`) using Selenium Wire’s `wait_for_request`. When a warm-up request is detected, session data is updated to ensure that the session remains valid.
 
-If valid cookies and headers already exist, the client:
+3. **Operations Retrieval:**
+   - **get_operations_via_requests:**  
+     Uses the `requests` library with the saved session cookies and headers to POST a JSON payload to the operations endpoint.
+   - **get_operations:**  
+     Executes an asynchronous JavaScript snippet in the browser context (using the live session) that makes a POST request via `fetch()`. This method bypasses issues that may occur if the `requests` session is used after prolonged inactivity.
 
-1. **Validates the Session:**
-   - Loads present cookies and headers from pickle file
-   - Makes a POST request to `https://web1.online.sberbank.ru/api/warmUpSession`.  
-   - A response of `{"code":0}` confirms that the session is valid.
+## Usage Example
 
-2. **Success Notification:**  
-   - A success message is displayed, confirming that the session is active.
+### SberBankOperationsFilter Usage
 
-## How to keep session alive:
-When user is authorized sberbank creates session with 15 minutes lifespan. 
-If we were to use SberBankApiClient for long periods of time we would need to log in manually every 15 minutes.
-But there is actually a way to prolong life of your session - you need to perform warmUpSession requests:
+The `SberBankOperationsFilter` class allows you to customize the operations query. Its parameters include:
 
-In browser web app session is prolonged by sending a POST request to 
-     `https://web1.online.sberbank.ru/api/warmUpSession` every 120-160 seconds, a request is sent to prolong the session.
+- **`operation_type`** *(str, optional)*:  
+  Specify the type of operation. For example: `'income'`, `'outcome'`, `'transfers'`, etc.
 
+- **`date_from`** *(str, optional)*:  
+  The start date for filtering operations. Format: `"dd.mm.yyyyT00:00:00"` (e.g., `"01.02.2025T00:00:00"`).
 
-# If your session is alive, then you can use SberBankApiClient methods:
+- **`date_to`** *(str, optional)*:  
+  The end date for filtering operations. Format: `"dd.mm.yyyyT23:59:59"` (e.g., `"15.02.2025T23:59:59"`).
 
-## Operations Retrieval
+- **`resource`** *(list, optional)*:  
+  A list of resource identifiers to filter operations. For example: `["card:1100016973909570"]`.
 
-The `get_operations` method is used to retrieve banking operations from SberBank's API. The process involves:
+- **`result_format`** *(any, optional)*:  
+  Determines the format of the result. Supported formats are `dict` (for a dictionary output) or `pd.DataFrame` (for a pandas DataFrame).
 
-1. **Operations Endpoint:**  
-   The endpoint for retrieving operations is:  
-   `https://web-node1.online.sberbank.ru/uoh-bh/v1/operations/list`
-   web-node1 - could change to other node name e.g. web-node2
+- **`pagination_offset`** *(int, default=0)*:  
+  Offset for pagination. If you have already retrieved a batch of operations, you can set this to the next index (e.g., 51 for the second batch if the batch size is 51).
 
-2. **Filtering Operations:**  
-   The API supports various filters via a JSON body in the request:
-   
-   - **Operation Types:**  
-     Filters can be applied based on the type of operation:
-     - `income` (пополнения)
-     - `outcome` (расходы)
-     - `financialTransactions` (Только финансовые операции)
-     - `cashless` (Покупки и платежи)
-     - `transfers` (Переводы)
-     - `cash` (Наличные)
-     - `stateNotifications` (Госуведомления)
-     - `promo` (Предложения и промокоды)
-   
-   - **Date Range Filtering:**  
-     Specify the range using `from` and `to` parameters with the date format:  
-     `"dd.mm.yyyyT23:59:59"`  
-     Example: `from="07.02.2025T23:59:59"` & `to="07.02.2025T23:59:59"`
+- **`pagination_size`** *(int, default=51)*:  
+  Number of operations to fetch per request (SberBank uses 51 by default; valid values are typically 1 to 200).
 
-   - **Resource Filtering:**  
-     Use the `usedResource` parameter to filter operations by resource ID.  
-     Example:
-     ```json
-     ["card:1100016973909570"]
-     ```
-     The resource ID can be extracted from a previous operations response (e.g., from `json["body"]["operations"][index]["fromResource"]["id"]`).
+- **`show_hidden`** *(bool, default=False)*:  
+  Whether to include hidden operations in the response.
 
-   - **Amount Filtering:**  
-     The JSON body can include parameters such as `fromAmount` and `toAmount` to limit operations within a specified monetary range.  
-     Example:
-     ```json
-     {
-       "paginationOffset": 0,
-       "paginationSize": 51,
-       "filterName": "outcome",
-       "fromAmount": 1,
-       "toAmount": 10000000
-     }
-     ```
-     This example filters withdrawal operations from 1 rouble up to 10 million roubles.
+### Example Usage of `SberBankOperationsFilter`
 
-3. **Response Structure:**  
-   A typical successful response from the operations endpoint has the following JSON structure:
+```python
+from rubank_api_client import SberBankOperationsFilter
 
-   ```json
-   {
-     "success": true,
-     "body": {
-       "operations": [
-         {
-           "uohId": "string",
-           "date": "dd.mm.yyyyTHH:MM:SS",
-           "creationChannel": number,
-           "form": "string",
-           "state": {
-             "name": "string",
-             "category": "string"
-           },
-           "description": "string",
-           "toResource": {
-             "id": "string",
-             "displayedValue": "string"
-           },
-           "correspondent": "string",
-           "operationAmount": {
-             "amount": number,
-             "currencyCode": "RUB"
-           },
-           "nationalAmount": {
-             "amount": number,
-             "currencyCode": "RUB"
-           },
-           "attributes": {
-             "copyable": boolean,
-             "nfc": boolean,
-             "cashReceipt": boolean,
-             "compositePayment": boolean
-           },
-           "classificationCode": number,
-           "type": "string",
-           "billingAmount": {
-             "amount": number,
-             "currencyCode": "RUB"
-           },
-           "externalId": "string",
-           "isFinancial": boolean
-         }
-       ]
-     }
-   }
+# Create a filter to retrieve income operations within a specific date range.
+_filter = SberBankOperationsFilter(
+    operation_type='income',          # Optional Type of operation (e.g., income, outcome, transfers, etc.)
+    date_from='01.02.2025T00:00:00',     # Optional Start date (inclusive)
+    date_to='15.02.2025T23:59:59',       # Optional End date (inclusive)
+    resource=["card:1100016973909570"], # Optional list of resources to filter by
+    pagination_size=51,                 # Number of operations per batch
+    pagination_offset=0,                # Starting offset for pagination
+    result_format=dict,                 # Format for results (can be dict or pd.DataFrame)
+    show_hidden=False                   # Whether to include hidden operations
+)
+```
 
-4. **Code example:**  
-```py
+### Example Usage of `get_operations` method
+Below is an example of how to use the client (as demonstrated in `tests/test_get_operations.py`):
+
+```python
+import time
 import pandas as pd
 from pprint import pprint
 from rubank_api_client import SberBankApiClient, SberBankOperationsFilter
 
 if __name__ == "__main__":
-    sbac = SberBankApiClient(path_to_cookies_file=None)
+    # Initialize the client; user must log in manually when the browser opens.
+    sbac = SberBankApiClient(path_to_cookies_file='../cookies.pkl')
 
+    # Create a filter for operations (customize the filter as needed)
     _filter = SberBankOperationsFilter(
         operation_type='income',
         date_from='01.02.2025T00:00:00',
         date_to='15.02.2025T23:59:59',
-        result_format=None
-    )
-    _filter.format = dict
-    operations_json = sbac.get_operations(
-        _filter=_filter
+        pagination_size=51,
+        pagination_offset=0,
+        result_format=dict,
+        show_hidden=False
     )
 
+    # Retrieve operations using the browser's fetch (live session)
+    operations_json = sbac.get_operations(_filter=_filter)
     pprint(operations_json)
 
-    _filter.format = pd.DataFrame
-    operations_pandas_df = sbac.get_operations(
-        _filter=_filter
-    )
+    # (Optional) Retrieve operations as a pandas DataFrame:
+    _filter.result_format = pd.DataFrame
+    operations_df = sbac.get_operations(_filter=_filter)
+    pprint(operations_df)
 
-    pprint(operations_pandas_df)
+    # Example: Running a loop to fetch subsequent batches after waiting (simulate long-running usage)
+    pagination_offset = 0
+    while True:
+        sbac.logger.info("Sleeping for 600 seconds...")
+        time.sleep(600)  # Wait for 10 minutes
+        _filter = SberBankOperationsFilter(
+            pagination_size=51,
+            pagination_offset=pagination_offset,
+            result_format=dict,
+            show_hidden=False
+        )
+        sbac.logger.info("Trying to get a new operations batch...")
+        operations_batch = sbac.get_operations(_filter=_filter)
+        sbac.logger.info("Got new operations batch:")
+        pprint(operations_batch)
+
+        pagination_offset += 51
 ```
