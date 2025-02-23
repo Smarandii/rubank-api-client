@@ -1,10 +1,12 @@
+import datetime
 import os
 import time
 import random
-import loguru
 import pickle
+import threading
 import requests
 import pandas as pd
+import loguru
 
 from seleniumwire import webdriver
 from selenium.webdriver.common.by import By
@@ -14,22 +16,29 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 class SberBankOperationsFilter:
-    def __init__(self, operation_type: str, date_from: str, date_to: str, resource: list = None,
-                 result_format: any = None,
-                 pagination_offset: int = 0, pagination_size: int = 50):
+    def __init__(
+        self,
+        operation_type: str = None,
+        date_from: str = None,
+        date_to: str = None,
+        resource: list = None,
+        result_format: any = None,
+        pagination_offset: int = 0,
+        pagination_size: int = 51,
+        show_hidden=False
+    ):
         self.type = operation_type
         self.date_from = date_from
         self.date_to = date_to
         self.resource = resource
-        self.result_format = result_format \
-            if result_format == dict or result_format == pd.DataFrame \
-            else None  # Can be dict or pd.DataFrame
+        self.result_format = result_format if result_format == dict or result_format == pd.DataFrame else None
         self.pagination_offset = pagination_offset
         self.pagination_size = pagination_size
+        self.show_hidden = show_hidden if isinstance(show_hidden, bool) else False
         self.logger = loguru.logger
 
         if result_format and not self.result_format:
-            self.logger.warning(f"SberBankOperationsFilter don't support result format: {result_format}. "
+            self.logger.warning(f"SberBankOperationsFilter doesn't support result format: {result_format}. "
                                 f"result_format is set to None")
 
     def to_json(self):
@@ -40,9 +49,10 @@ class SberBankOperationsFilter:
             "usedResource": self.resource,
             "paginationOffset": self.pagination_offset,
             "paginationSize": self.pagination_size,
+            "showHidden": self.show_hidden
         }
-        payload = {key: value for key, value in payload.items() if value is not None}
-        return payload
+        # Remove keys with None values
+        return {key: value for key, value in payload.items() if value is not None}
 
 
 class SberBankApiClient:
@@ -57,11 +67,66 @@ class SberBankApiClient:
         self.logger = loguru.logger
         self.driver = webdriver.Chrome()
 
-        if self._load_session():
-            self.logger.info("Conserved session is valid. You're in!")
-        else:
-            self._login_and_save_session()
-            self.logger.info("New session is created. You're in!")
+        # User logs in manually.
+        self._login_and_save_session()
+        self.logger.info("New session is created. You're in!")
+        self.session_started = datetime.datetime.now()
+
+        # Start two daemon threads:
+        # 1. To simulate random human-like activity.
+        # 2. To watch for warmUp session requests and conserve session data.
+        self._start_activity_threads()
+
+    def _start_activity_threads(self):
+        human_activity_thread = threading.Thread(target=self._simulate_human_activity, daemon=True)
+        warmup_watch_thread = threading.Thread(target=self._watch_warmup_requests, daemon=True)
+        human_activity_thread.start()
+        warmup_watch_thread.start()
+
+    def _simulate_human_activity(self):
+        """
+        Periodically performs random actions (e.g. scrolling) to simulate human activity.
+        """
+        self.driver.get(self.OPERATIONS_PAGE_URL)
+        while True:
+            try:
+                # Example: Scroll by a random amount.
+                scroll_amount = random.randint(50, 200)
+                self.driver.execute_script("window.scrollBy(0, arguments[0]);", scroll_amount)
+                time.sleep(random.uniform(1, 3))
+                self.driver.refresh()
+
+                request = self.driver.wait_for_request(self.OPERATIONS_URL, timeout=10)
+                self.SBERBANK_BACKEND_API_WEB_NODE_HEADERS = request.headers
+                self.__conserve_session()
+
+                self.logger.info(f"Simulated human activity: scrolled by {scroll_amount} pixels.")
+            except Exception as e:
+                self.logger.error(f"Error simulating human activity: {e}")
+            # Wait a random period before next action.
+            time.sleep(random.uniform(30, 60))
+
+    def _watch_warmup_requests(self):
+        """
+        Waits for warmUp session requests using Selenium Wire's wait_for_request.
+        When such a request is detected, session data is conserved.
+        """
+        while True:
+            try:
+                self.logger.info("Waiting for warmUp session request...")
+                # Wait for a warmUp request. Adjust the timeout as needed.
+                request = self.driver.wait_for_request(self.WARMUP_URL, timeout=800)
+                if request:
+                    self.logger.info("WarmUp session request detected.")
+                    # Clear the request log to prevent memory buildup.
+                    self.driver.requests.clear()
+            except TimeoutException:
+                self.logger.warning(f"Timeout occurred while waiting for warmUp request! "
+                                    f"Session was kept alive for {datetime.datetime.now() - self.session_started}...")
+
+                # TODO: Pause. Send alert to user via telegram with new QR code for re-creating session
+            except Exception as e:
+                self.logger.error(f"Error in warmUp watch thread: {e}")
 
     def __initialize_sberbank_public_api_endpoints(
             self,
@@ -74,86 +139,16 @@ class SberBankApiClient:
             self.SBERBANK_BACKEND_API_WEB_NODE_ID = sberbank_backend_api_web_node_id
 
         self.MAIN_URL = f"https://{self.SBERBANK_FRONTEND_WEB_NODE_ID}.online.sberbank.ru/main"
+        self.OPERATIONS_PAGE_URL = f"https://{self.SBERBANK_FRONTEND_WEB_NODE_ID}.online.sberbank.ru/operations"
         self.WARMUP_URL = f"https://{self.SBERBANK_FRONTEND_WEB_NODE_ID}.online.sberbank.ru/api/warmUpSession"
         self.LOG_REPORT_URL = f"https://{self.SBERBANK_FRONTEND_WEB_NODE_ID}.online.sberbank.ru/api/log/report"
         self.OPERATIONS_URL = f"https://{self.SBERBANK_BACKEND_API_WEB_NODE_ID}.online.sberbank.ru/uoh-bh/v1/operations/list"
-
-    def _load_session(self):
-        if not os.path.exists(self.path_to_cookies_file):
-            return False
-
-        # Open sber web app, to load cookies and local_storage to right domain
-        self.driver.get(self.LOGIN_URL)
-        self.driver.delete_all_cookies()
-
-        # Load cookies, local storage items and headers from a pickle file if it exists.
-        with open(self.path_to_cookies_file, "rb") as f:
-            data = pickle.load(f)
-            self.request_cookies = data.get("cookies")
-            self.selenium_driver_cookies = data.get("selenium_driver_cookies")
-            self.headers = data.get("headers")
-            self.local_storage = data.get("local_storage")
-
-            self.SBERBANK_FRONTEND_WEB_NODE_ID = data.get("sberbank_frontend_web_node_id")
-            self.SBERBANK_BACKEND_API_WEB_NODE_ID = data.get("sberbank_backend_api_web_node_id")
-
-            # Set loaded cookies in the requests session.
-            if self.request_cookies:
-                self.session.cookies.update(self.request_cookies)
-
-            if self.local_storage:
-                self.__load_local_storage(self.local_storage)
-
-            # Set loaded cookies in selenium driver
-            if self.selenium_driver_cookies:
-                for cookie_obj in self.selenium_driver_cookies:
-                    if cookie_obj['domain'][0] != ".":
-                        self.driver.get("https://" + cookie_obj['domain'])
-                    else:
-                        pass
-                    self.driver.add_cookie(cookie_obj)
-                    time.sleep(random.uniform(3, 6))
-
-        if not self.SBERBANK_BACKEND_API_WEB_NODE_ID or not self.SBERBANK_FRONTEND_WEB_NODE_ID:
-            return False
-
-        self.driver.get(self.LOGIN_URL)
-        return True
-        # # Wait for the PIN entry element to appear.
-        # try:
-        #     # Wait for an element that exists only on the PIN page.
-        #     # For example, we look for an element with the unique data attribute:
-        #     WebDriverWait(self.driver, 10).until(
-        #         EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="input-pin-indicator"]'))
-        #     )
-        #     # If found, assume session is restored and PIN code prompt is displayed.
-        #     self.pin_code = "13378"
-        #
-        #     for digit in self.pin_code:
-        #         btn = WebDriverWait(self.driver, 5).until(
-        #             EC.element_to_be_clickable((By.XPATH, f'//button[.//div[contains(text(), "{digit}")]]'))
-        #         )
-        #         btn.click()
-        #         # Short delay between clicks (adjust if necessary)
-        #         time.sleep(random.uniform(0.01, 0.5))
-        #
-        #     return True
-        # except TimeoutException:
-        #     # If the element does not appear within the timeout, then the session did not load properly.
-        #     return True # TODO: Replace True with False
-        #     # Temporarily return True, because we fall back on user to enter pincode
-
-    def __load_local_storage(self, local_storage):
-        for key, value in local_storage.items():
-            self.driver.execute_script(
-                "window.localStorage.setItem(arguments[0], arguments[1]);", key, value
-            )
 
     def _login_and_save_session(self):
         try:
             self.logger.info("No valid session found. Initiating login process...")
             self.driver.get(self.LOGIN_URL)
-            self.logger.info("Wait for the user to log in manually...")
+            self.logger.info("Waiting for the user to log in manually...")
 
             self.SBERBANK_FRONTEND_WEB_NODE_ID = self.__get_sber_frontend_web_node_id()
             self.logger.info(f"SBERBANK_FRONTEND_WEB_NODE_ID prefix: {self.SBERBANK_FRONTEND_WEB_NODE_ID}")
@@ -167,42 +162,36 @@ class SberBankApiClient:
                     self.SBERBANK_BACKEND_API_WEB_NODE_ID
                 )
             else:
-                raise Exception(f"Missing self.SBERBANK_FRONTEND_WEB_NODE_ID ({self.SBERBANK_FRONTEND_WEB_NODE_ID}) or "
-                                f"self.SBERBANK_BACKEND_API_WEB_NODE_ID ({self.SBERBANK_BACKEND_API_WEB_NODE_ID}).")
+                raise Exception(
+                    f"Missing SBERBANK_FRONTEND_WEB_NODE_ID ({self.SBERBANK_FRONTEND_WEB_NODE_ID}) or "
+                    f"SBERBANK_BACKEND_API_WEB_NODE_ID ({self.SBERBANK_BACKEND_API_WEB_NODE_ID})."
+                )
         except TimeoutException:
-            self.logger.error("Failed to wait for request to find out "
-                              "SBERBANK_BACKEND_API_WEB_NODE_ID or SBERBANK_FRONTEND_WEB_NODE_ID value...")
+            self.logger.error("Failed to wait for request to determine node ID values...")
         except Exception as e:
             self.logger.error(e)
 
         self.logger.info("Login successful. Retrieving session data...")
-
         self.__conserve_session()
-
         self.logger.info("Session data saved. You're in!")
 
     def __get_sber_frontend_web_node_id(self):
-        # Sberbank redirects user to https://{web_node_name}.online.sberbank.ru/main after
-        # That's why we use this expression to figure out if user logged in or not.
-        # Extracting web_node_name from https://{web_node_name}.online.sberbank.ru/main
-
-        self.logger.info("Waiting for request to find out SBERBANK_FRONTEND_WEB_NODE_ID value...")
-        request = self.driver.wait_for_request('/main', timeout=100)  # Long timeout to allow user not to hurry
-
+        self.logger.info("Waiting for request to determine SBERBANK_FRONTEND_WEB_NODE_ID...")
+        request = self.driver.wait_for_request('/main', timeout=100)  # Adjust timeout as needed.
         return request.url.split(".")[:1:][0].split("https://")[1]
 
     def __get_sber_backend_api_web_node_id(self):
-        # Extracting api_web_node_name from
-        # https://{api_web_node_name}.online.sberbank.ru/main-screen/rest/v2/m1/web/section/meta
-
-        self.logger.info("Waiting for request to find out SBERBANK_BACKEND_API_WEB_NODE_ID value...")
+        self.logger.info("Waiting for request to determine SBERBANK_BACKEND_API_WEB_NODE_ID...")
         request = self.driver.wait_for_request('/main-screen/rest/v2/m1/web/section/meta', timeout=20)
         self.SBERBANK_BACKEND_API_WEB_NODE_HEADERS = request.headers
-
         endpoint_parts = request.url.split(".")
         return endpoint_parts[:1:][0].split("https://")[1]
 
     def __conserve_session(self):
+        """
+        Saves session data: cookies from the Selenium driver, headers, and local storage.
+        Also updates the requests.Session with the latest cookies.
+        """
         self.request_cookies = {cookie["name"]: cookie["value"] for cookie in self.driver.get_cookies()}
         self.selenium_driver_cookies = self.driver.get_cookies()
         self.session.cookies.update(self.request_cookies)
@@ -212,7 +201,6 @@ class SberBankApiClient:
         }
         self.headers.update(self.SBERBANK_BACKEND_API_WEB_NODE_HEADERS)
 
-        # Save cookies, headers, and local storage to file.
         session_data = {
             "cookies": self.request_cookies,
             "selenium_driver_cookies": self.selenium_driver_cookies,
@@ -223,6 +211,7 @@ class SberBankApiClient:
         }
         with open(self.path_to_cookies_file, "wb") as f:
             pickle.dump(session_data, f)
+        self.logger.info("Session conserved to file.")
 
     def get_local_storage(self):
         return self.driver.execute_script("""
@@ -234,47 +223,21 @@ class SberBankApiClient:
             return ls;
         """)
 
-    def _validate_session(self):
-        # TODO: Consider removing or rewriting this method
-        # Validate the session by making a POST request to warmUpSession.
-        try:
-            response = self.session.post(self.WARMUP_URL)
-            self.logger.info(f"POST {self.WARMUP_URL}: {response.json()}")
-            if response.status_code == 200 and response.json().get("code") == 0:
-                return True
-        except Exception as e:
-            self.logger.info("Session validation failed:", e)
-        return False
-
-    def warm_up_session(self):
-        # TODO: Consider removing or rewriting this method
-        # Send a POST request to prolong the session.
-        try:
-            response = self.session.post(self.WARMUP_URL, headers=self.headers)
-            if response.status_code == 200 and response.json().get("code") == 0:
-                self.logger.info("Session prolonged successfully.")
-            else:
-                self.logger.info("Failed to prolong session.")
-        except Exception as e:
-            self.logger.info("Error during session warm-up:", e)
-
     @staticmethod
     def __parse_operations_json_response(data: dict) -> list[dict]:
         return data['body']['operations']
 
     def get_operations(self, _filter: SberBankOperationsFilter):
         payload = _filter.to_json()
-
-        try:
-            response = self.session.post(self.OPERATIONS_URL, json=payload, headers=self.headers)
-            if response.status_code == 200:
-                data = response.json()
-                if _filter.result_format == pd.DataFrame:
-                    return pd.DataFrame(self.__parse_operations_json_response(data))
-                else:
-                    return self.__parse_operations_json_response(data)
+        response = self.session.post(
+            self.OPERATIONS_URL, json=payload, headers=self.headers, cookies=self.request_cookies
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if _filter.result_format == pd.DataFrame:
+                return pd.DataFrame(self.__parse_operations_json_response(data))
             else:
-                self.logger.info("Failed to get operations. Status code:", response.status_code)
-        except Exception as e:
-            self.logger.info("Error retrieving operations:", e)
+                return self.__parse_operations_json_response(data)
+        else:
+            self.logger.info("Failed to get operations. Status code:", response.status_code)
         return None
