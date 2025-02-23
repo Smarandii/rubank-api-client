@@ -97,6 +97,9 @@ class SberBankApiClient:
                 self.driver.refresh()
 
                 request = self.driver.wait_for_request(self.OPERATIONS_URL, timeout=10)
+                self.logger.info(f"_simulate_human_activity invoked get operations request: {request}")
+                self.headers = request.headers
+                self.logger.info(f"get operations request headers: {request.headers}")
                 self.SBERBANK_BACKEND_API_WEB_NODE_HEADERS = request.headers
                 self.__conserve_session()
 
@@ -231,7 +234,7 @@ class SberBankApiClient:
     def __parse_operations_json_response(data: dict) -> list[dict]:
         return data['body']['operations']
 
-    def get_operations(self, _filter: SberBankOperationsFilter):
+    def get_operations_via_requests(self, _filter: SberBankOperationsFilter):
         payload = _filter.to_json()
         response = self.session.post(
             self.OPERATIONS_URL, json=payload, headers=self.headers, cookies=self.request_cookies
@@ -245,3 +248,48 @@ class SberBankApiClient:
         else:
             self.logger.info("Failed to get operations. Status code:", response.status_code)
         return None
+
+    def get_operations(self, _filter: SberBankOperationsFilter):
+        """
+        Uses the browser's fetch() API to POST to the operations endpoint.
+        This ensures the request is sent using the live browser session,
+        thereby avoiding proxy issues that can occur with requests.Session.
+        """
+        payload = _filter.to_json()
+
+        # The asynchronous script to run in the browser context.
+        # It uses fetch() with credentials included.
+        script = """
+            const url = arguments[0];
+            const payload = arguments[1];
+            const additionalHeaders = arguments[2];
+            const callback = arguments[3];
+            fetch(url, {
+                method: 'POST',
+                credentials: 'include',
+                headers: Object.assign({
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }, additionalHeaders),
+                body: JSON.stringify(payload)
+            })
+            .then(response => response.json())
+            .then(data => callback(data))
+            .catch(error => callback({'error': error.toString()}));
+        """
+
+        # Execute the async script in the browser.
+        data = self.driver.execute_async_script(script, self.OPERATIONS_URL, payload, self.headers)
+
+        # Check if an error occurred.
+        if isinstance(data, dict) and 'error' in data:
+            self.logger.error("Error fetching operations: " + data['error'])
+            return None
+
+        # Parse the response.
+        operations = data.get('body', {}).get('operations', [])
+
+        if _filter.result_format == pd.DataFrame:
+            return pd.DataFrame(operations)
+        else:
+            return operations
