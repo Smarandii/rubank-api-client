@@ -120,11 +120,15 @@ class SberBankApiClient:
                     self.logger.info("WarmUp session request detected.")
                     # Clear the request log to prevent memory buildup.
                     self.driver.requests.clear()
+                    time.sleep(random.uniform(10, 40))
             except TimeoutException:
                 self.logger.warning(f"Timeout occurred while waiting for warmUp request! "
                                     f"Session was kept alive for {datetime.datetime.now() - self.session_started}...")
 
+                # TODO: Check if session is dead
+
                 # TODO: Pause. Send alert to user via telegram with new QR code for re-creating session
+                #  (if session is dead, otherwise do nothing)
             except Exception as e:
                 self.logger.error(f"Error in warmUp watch thread: {e}")
 
