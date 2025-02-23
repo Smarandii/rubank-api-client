@@ -9,7 +9,7 @@ if __name__ == "__main__":
         operation_type='income',
         date_from='01.02.2025T00:00:00',
         date_to='15.02.2025T23:59:59',
-        pagination_size=100,
+        pagination_size=50,
         pagination_offset=0,
         result_format=None
     )
