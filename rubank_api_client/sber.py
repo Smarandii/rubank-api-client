@@ -55,7 +55,7 @@ class SberBankApiClient:
     LOGIN_URL = "https://online.sberbank.ru/CSAFront/index.do"
 
     def __init__(self, path_to_cookies_file: str = None):
-        self.path_to_cookies_file = path_to_cookies_file if path_to_cookies_file else "cookies.pkl"
+        self.path_to_cookies_file = path_to_cookies_file if path_to_cookies_file else "sber_cookies.pkl"
         self.session = requests.Session()
         self.request_cookies = None
         self.selenium_driver_cookies = None

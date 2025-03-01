@@ -124,7 +124,7 @@ from rubank_api_client import SberBankApiClient, SberBankOperationsFilter
 
 if __name__ == "__main__":
     # Initialize the client; user must log in manually when the browser opens.
-    sbac = SberBankApiClient(path_to_cookies_file='../cookies.pkl')
+    sbac = SberBankApiClient(path_to_cookies_file='../sber_cookies.pkl')
 
     # Create a filter for operations (customize the filter as needed)
     _filter = SberBankOperationsFilter(
