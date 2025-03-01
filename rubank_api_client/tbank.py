@@ -96,6 +96,7 @@ class TBankApiClient:
         self._login_and_save_session()
         self.logger.info("New session is created. You're in!")
         self.session_started = datetime.datetime.now()
+        self.all_operations = json.loads(self.operations_file)
 
         # Start two daemon threads:
         # 1. To simulate random human-like activity.
@@ -259,7 +260,8 @@ class TBankApiClient:
                     existing_operations[op_id] = op
             # Save the merged operations dictionary back to file (overwrite existing file)
             with open(self.operations_file, "w", encoding="utf-8") as f:
-                json.dump(existing_operations, f, ensure_ascii=False, indent=2)
+                self.all_operations = existing_operations
+                json.dump(existing_operations, f, ensure_ascii=False, indent=4)
         except Exception as e:
             self.logger.error(f"Error processing new operations: {e}")
 
@@ -330,7 +332,7 @@ class TBankApiClient:
         Filtering is done based on the 'debitingTime' field (milliseconds).
         """
         # Load all cached operations (a dict keyed by operation id)
-        cached_ops = self.__load_cached_operations()
+        cached_ops = self.all_operations
         # Convert the filter's date_from and date_to to integers (assumed to be in milliseconds)
         date_from = int(_filter.date_from)
         date_to = int(_filter.date_to)
